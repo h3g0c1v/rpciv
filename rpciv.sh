@@ -23,31 +23,39 @@ function ctrl_c () {
 trap ctrl_c SIGINT
 
 function checkConnection () {
-  if [[ $nullSession ]]; then
-    rpcclient -N $ipAddress -U '' -c "getusername" &>/dev/null
-    
-    if [ $? -eq 0 ]; then
-      userConnect=$(rpcclient -N $ipAddress -U '' -c "getusername" | cut -f 2 -d ":" | cut -f 1 -d "," | sed "s/^ //g")
-      return 0
+
+  timeout 1 bash -c "ping -c 1 $ipAddress &>/dev/null" # Testing connection
+
+  if [ $? -ne 0 ]; then
+    echo -e "\n${red}[!]${end}${gray} Connection refused${end}" # No connectivity
+    exit 1
+  else 
+    if [[ $nullSession ]]; then # Null session indicated
+      rpcclient -N $ipAddress -U '' -c "getusername" &>/dev/null # Obtaining the current user
+
+      if [ $? -eq 0 ]; then
+        userConnect=$(rpcclient -N $ipAddress -U '' -c "getusername" | cut -f 2 -d ":" | cut -f 1 -d "," | sed "s/^ //g") # Null Session is available
+        return 0
+      fi
+  
+      echo -e "\n${red}[!]${end}${gray} Null session is not available${end}" # Null Session is not available
+      return 1
+  
+    else # Credentials provided
+      rpcclient $ipAddress -U "$username%$password" -c "getusername" &>/dev/null # Obtaining the current user
+  
+      if [ $? -eq 0 ]; then
+        userConnect=$(rpcclient -U "$username%$password" $ipAddress -c "getusername" | cut -f 2 -d ":" | cut -f 1 -d "," | sed "s/^ //g") # Credentials are correct
+        return 0
+      fi
     fi
-
-    echo -e "\n${red}[!]${end}${gray} Null session is not available${end}"
-    return 1
-
-  else
-    rpcclient $ipAddress -U "$username%$password" -c "getusername" &>/dev/null 
-
-    if [ $? -eq 0 ]; then
-      userConnect=$(rpcclient -U "$username%$password" $ipAddress -c "getusername" | cut -f 2 -d ":" | cut -f 1 -d "," | sed "s/^ //g")
-      return 0
-    fi
-  fi 
-
-  echo -e "\n${red}[!]${end}${gray} Invalid Credentials!${end}"
+  fi
+  
+  echo -e "\n${red}[!]${end}${gray} Invalid Credentials!${end}" # Invalid credentials
   return 1
 }
 
-# Help Global Panel
+# Help Global Panel (How to use)
 function helpGlobalPanel () {
   echo -e "\n${yellow}[i] ${end}${gray}Use: $0 [-u USERNAME -p PASSWORD] [-n] IP_ADDRESS${end}\n"
   echo -e "${gray}   -u, --username\t➜    Set username${end}"
@@ -55,7 +63,7 @@ function helpGlobalPanel () {
   echo -e "${gray}   -n, --null-session\t➜    Connect using a null session${end}"
 }
 
-# Help Commands Panel
+# Help Commands Panel (Available Commands)
 function helpPanel () {
   echo -e "\n${yellow}[i] ${end}${gray}Generic Commands:${end}\n"
   echo -e "${gray}   help, h\t\t\t\t➜    Show this help panel${end}"
@@ -69,7 +77,7 @@ function helpPanel () {
   echo -e "${gray}   show users, s u\t\t\t➜    Show available users list${end}"
   echo -e "${gray}   show groups, s g\t\t\t➜    Show available group list${end}"
   echo -e "${gray}   show users description, s u d\t➜    Show available description about users"
-  echo -e "${gray}   show groups descriptions, s g d\t➜    Show available description about groups"
+  echo -e "${gray}   show groups description, s g d\t➜    Show available description about groups"
 }
 
 # Who Am I
@@ -77,8 +85,8 @@ function whoAmI () {
   echo -e "\n${gray}Current User: ${end}${yellow}$userConnect${end}"
 }
 
+# Function to change de desired prompt
 function changePrompt () {
-
   case "$command" in
     prompt\ [0-7])
       declare -i num=$(echo "$command" | awk '{print $2}')
@@ -92,6 +100,7 @@ function changePrompt () {
   esac
 }
 
+# Defining the available prompts
 function definePrompts () {
   prompt1="[$userConnect] >"
   prompt2ToShow="╭─[$userConnect] \n           ╰─> "
@@ -103,6 +112,7 @@ function definePrompts () {
   prompt7="[💻 $userConnect] >"
 }
 
+# Displaying available prompts
 function showAvailablePrompts () {
   definePrompts
 
@@ -118,7 +128,7 @@ function showAvailablePrompts () {
   return $counter
 }
 
-# Show available users list
+# Show available users or groups list (code reuse)
 function showUsersGroups () {
   command="$1"
   filter="$2"
@@ -135,45 +145,48 @@ function showUsersGroups () {
   fi
 
   echo -e "${green}"
-  displayTable "$objects" "$objectInTable"
+  displayTable "$objects" "$objectInTable" # Display information in a table
   echo -e "${end}"
 }
 
-# Function to show th description of any user and group
+# Function to show the description of any user and group (this function is the same to "show users description" and "show groups description") - (code reuse)
 function showDescription {
   objectToShowDescription="$1"
 
-  if [ $nullSession ]; then
+  if [ $nullSession ]; then # Obtaining the description with a null session
     usersList=$(rpcclient -N $ipAddress -U '' -c "enumdomusers" | sed -e "s/user:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
     groupsList=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | sed -e "s/group:\[.*rid:\[/#/g" | tr -d '#]')
-  else
+
+  else # Obtaining the description with the credentials supplied
     usersList=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomusers" | sed -e "s/user:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
     groupsList=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | sed -e "s/group:\[.*rid:\[/#/g" | tr -d '#]')
   fi
 
   case "$objectToShowDescription" in
-    "users") 
+    "users") # "show users description"
       echo -e "\n${yellow}[i]${end}${gray} Showing users description${end}"
       describeUsersAndGroups "$usersList" "queryuser" ;;
 
-    "groups")
+    "groups") # "show groups description"
       echo -e "\n${yellow}[i]${end}${gray} Showing groups description${end}"
       describeUsersAndGroups "$groupsList" "querygroup"
   esac
 }
 
+# Function to obtain the description of a user or group (code reuse)
 function describeUsersAndGroups () {
-  list="$1"
-  RpcCommand="$2"
+  list="$1" # $usersList / $groupsList
+  RpcCommand="$2" # "queryuser" / "querygroup"
 
   declare -i counter=1
-  for object in $(echo $list); do
-    if [ $nullSession ]; then
-      description=$(rpcclient -N $ipAddress -U '' -c "$RpcCommand $object" | grep 'Description' | cut -f 2 -d ':' | tr -d '\t')
-    else
-      description=$(rpcclient $ipAddress -U "$username%$password" -c "$RpcCommand $object" | grep 'Description' | cut -f 2 -d ':' | tr -d '\t')
+  for object in $(echo $list); do # Iterating for each user / group
+    if [ $nullSession ]; then # With Null Session
+      description=$(rpcclient -N $ipAddress -U '' -c "$RpcCommand $object" | grep 'Description' | cut -f 2 -d ':' | tr -d '\t') # Obtaining the user / group description
+    else # With credentials
+      description=$(rpcclient $ipAddress -U "$username%$password" -c "$RpcCommand $object" | grep 'Description' | cut -f 2 -d ':' | tr -d '\t') # Obtaining the user / group description
     fi
 
+    # If the user or group has a description, that description will be shown
     if [ "$description" ]; then
       if [ "$RpcCommand" == "queryuser" ]; then
         showObject="$object"
@@ -185,7 +198,7 @@ function describeUsersAndGroups () {
         fi
       fi
 
-      printf "\n${green}%-20s${end} ${gray}:${end} ${green}%s${end}\n" "$showObject" "$description"
+      printf "\n${green}%-20s${end} ${gray}:${end} ${green}%s${end}\n" "$showObject" "$description" # Printing description
       counter+=1
     fi
   done
@@ -241,7 +254,7 @@ function displayTable() {
 declare -i parameter_counter=0 # Counter to control de parameters
 
 # Getting parameters
-while getopts "hu:p:n" arg; do
+while getopts "hu:p:n" arg; do # [Help Panel (-h)] [Username (-u), Password (-p)] [Null Session (-n)]
   case $arg in
       h) helpGlobalPanel; exit 0;; # Help Script Panel
       u) username="$OPTARG"; let parameter_counter+=1;;
@@ -283,15 +296,15 @@ while true; do
 
   case "$command" in
     "help"|"H"|"h") helpPanel ;; # Command Help Panel
-    $'\f'|"clear"|"c") clear ;;
-    "exit"|"e") exit 0 ;;
+    $'\f'|"clear"|"c") clear ;; # Clear the screen
+    "exit"|"e") exit 0 ;; # Exit the program
     "whoami"| "w") whoAmI ;; # Print the current user
     "list prompts"|"l p") showAvailablePrompts ;;
-    prompt*) changePrompt "$command" ;; # You can change de prompt
+    prompt*) changePrompt "$command" ;; # Change de prompt
     "show users"|"s u") showUsersGroups "enumdomusers" "user" "Username" ;; # Showing existing users
     "show groups"|"s g") showUsersGroups "enumdomgroups" "group" "Group" ;; # Showing existing groups 
-    "show users description"|"s u d") showDescription "users" ;;
-    "show groups descriptions"|"s g d") showDescription "groups" ;;
+    "show users description"|"s u d") showDescription "users" ;; # Show users description
+    "show groups description"|"s g d") showDescription "groups" ;; # show groups description
     "");;
     *) echo -e "\n${red}[!]${end}${gray} Command NOT recognized${end}"; helpPanel;;
   esac

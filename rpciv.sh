@@ -67,7 +67,7 @@ function helpGlobalPanel () {
 function helpPanel () {
   echo -e "\n${yellow}[i] ${end}${gray}Generic Commands:${end}\n"
   echo -e "${gray}   help, h\t\t\t\t➜    Show this help panel${end}"
-  echo -e "${gray}   clear, c\t\t\t\t➜    Clear the screen${end}"
+  echo -e "${gray}   clear, c, CTRL + L ENTER\t\t➜    Clear the screen${end}"
   echo -e "${gray}   exit, e\t\t\t\t➜    Terminate the program${end}"
   echo -e "${gray}   whoami, w\t\t\t\t➜    Who am I executing commands${end}"
   echo -e "${gray}   list prompts, l p\t\t\t➜    List available prompts"
@@ -78,6 +78,11 @@ function helpPanel () {
   echo -e "${gray}   show groups, s g\t\t\t➜    Show available group list${end}"
   echo -e "${gray}   show users description, s u d\t➜    Show available description about users"
   echo -e "${gray}   show groups description, s g d\t➜    Show available description about groups"
+  echo -e "${gray}   show group members GROUP, s g m\t➜    List the members of a specific group"
+  echo -e "${gray}   show password policies, s p p\t➜    Show the domain password policies (length, expiration, etc ...)"
+  echo -e "${gray}   show user sid USER, s u s\t\t➜    Show the SID of a specific user"
+  echo -e "${gray}   show group sid GROUP, s g s\t➜    Show the SID of a specific group"
+  echo -e "${gray}   show trusted domains, s t d\t➜    Show trusting relationships"
 }
 
 # Who Am I
@@ -145,6 +150,7 @@ function showUsersGroups () {
   fi
 
   echo -e "${green}"
+  echo "$objectInTable"
   displayTable "$objects" "$objectInTable" # Display information in a table
   echo -e "${end}"
 }
@@ -192,7 +198,7 @@ function describeUsersAndGroups () {
         showObject="$object"
       elif [ "$RpcCommand" == "querygroup" ]; then
         if [ $nullSession ]; then
-          showObject=$(rpcclient $ipAddress -U "$username%$password" -c "querygroup $object" | grep 'Group Name' | cut -f 2 -d ':' | tr -d '\t')
+          showObject=$(rpcclient -N $ipAddress -U '' -c "querygroup $object" | grep 'Group Name' | cut -f 2 -d ':' | tr -d '\t')
         else
           showObject=$(rpcclient $ipAddress -U "$username%$password" -c "querygroup $object" | grep 'Group Name' | cut -f 2 -d ':' | tr -d '\t')
         fi
@@ -202,6 +208,66 @@ function describeUsersAndGroups () {
       counter+=1
     fi
   done
+}
+
+# Function to show the members of a group
+function showGroupMembers () {
+  group=$(echo "$availableGroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#' | grep -iE "^$selectedGroup$") # Obtaining real group name
+
+  echo -e "\n${yellow}[i]${end}${gray} Showing members of${end}${yellow} $group${end}${gray} group. Please wait ...${end}"
+
+  if [ $nullSession ]; then
+    groupRid=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
+
+    for rid in $(rpcclient -N $ipAddress -U '' -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
+      groupMembers+=$(rpcclient -N $ipAddress -U '' -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
+    done
+  else
+    groupRid=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
+
+    for rid in $(rpcclient $ipAddress -U "$username%$password" -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
+      groupMembers+=$(rpcclient $ipAddress -U "$username%$password" -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
+    done
+  fi
+
+  if [ "$groupMembers" ]; then # If there are members in the provided group
+    members=$(echo "$groupMembers" | tail -n +2) # Deleting the first \n
+  
+    echo -e "${green}"
+    displayTable "$members" "Miembros" # Displaying all members in a table
+    echo -e "${end}"
+  else
+    echo -e "\n${red}[i]${end}${gray} There is no member for the group${end}${yellow} $group${end}" # If there are NO members in the provided group
+  fi
+}
+
+# Function to check the existence of a group
+function checkGroupExistence () {
+
+  selectedGroup=$(echo "$1" | cut -f 4- -d ' ') # Defining the group
+
+  if [ $nullSession ]; then
+    availableGroups=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#') # Obtaining all available groups
+  else
+    availableGroups=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#') # Obtaining all available groups
+  fi
+
+  echo "$availableGroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#' | grep -iE "^$selectedGroup$" &>/dev/null # Checking if the provided group exists
+
+  if [ $? -eq 0 ]; then
+    return 0 # The provided group exist, return 0
+  fi
+  
+  return 1 # The provided group does NOT exist, return 1
+}
+
+# Function to show password policies
+function showPasswordPolicies () {
+  if [ $nullSession ]; then
+    rpcclient -N $ipAddress -U '' -c "getdompwinfo" # Showing password policies
+  else
+    rpcclient $ipAddress -U "$username%$password" -c "getdompwinf" # Showing password policies
+  fi
 }
 
 # Function to display a table with the contents of a variable
@@ -304,7 +370,9 @@ while true; do
     "show users"|"s u") showUsersGroups "enumdomusers" "user" "Username" ;; # Showing existing users
     "show groups"|"s g") showUsersGroups "enumdomgroups" "group" "Group" ;; # Showing existing groups 
     "show users description"|"s u d") showDescription "users" ;; # Show users description
-    "show groups description"|"s g d") showDescription "groups" ;; # show groups description
+    "show groups description"|"s g d") showDescription "groups" ;; # Show groups description
+    show\ group\ members\ *|s\ g\ m\ *) checkGroupExistence "$command" && showGroupMembers "$selectedGroup" || echo -e "\n${red}[!]${end}${gray} The specified group does not exist";; # Display the members of a group
+    "show password policies"|"s p p") showPasswordPolicies ;; # Show password policies
     "");;
     *) echo -e "\n${red}[!]${end}${gray} Command NOT recognized${end}"; helpPanel;;
   esac

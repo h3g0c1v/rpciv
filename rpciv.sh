@@ -55,6 +55,21 @@ function checkConnection () {
   return 1
 }
 
+# Function to check the existence of a group
+function checkUserGroupExistence () {
+  selectedObject=$(echo "$1" | cut -f 4- -d ' ') # Defining the user/group
+  objects="$2"
+  filter="$3"
+
+  echo "$objects" | grep -iE "^$selectedObject$" &>/dev/null # Checking if the provided user/group exists
+
+  if [ $? -eq 0 ]; then
+    return 0 # The provided group exist, return 0
+  fi
+  
+  return 1 # The provided group does NOT exist, return 1
+}
+
 # Help Global Panel (How to use)
 function helpGlobalPanel () {
   echo -e "\n${yellow}[i] ${end}${gray}Use: $0 [-u USERNAME -p PASSWORD] [-n] IP_ADDRESS${end}\n"
@@ -79,7 +94,6 @@ function helpPanel () {
   echo -e "${gray}   show users description, s u d\t➜    Show available description about users"
   echo -e "${gray}   show groups description, s g d\t➜    Show available description about groups"
   echo -e "${gray}   show group members GROUP, s g m\t➜    List the members of a specific group"
-  echo -e "${gray}   show password policies, s p p\t➜    Show the domain password policies (length, expiration, etc ...)"
   echo -e "${gray}   show user sid USER, s u s\t\t➜    Show the SID of a specific user"
   echo -e "${gray}   show group sid GROUP, s g s\t➜    Show the SID of a specific group"
   echo -e "${gray}   show trusted domains, s t d\t➜    Show trusting relationships"
@@ -135,7 +149,7 @@ function showAvailablePrompts () {
 
 # Show available users or groups list (code reuse)
 function showUsersGroups () {
-  command="$1"
+  RpcCommand="$1"
   filter="$2"
   objectInTable="$3"
 
@@ -144,15 +158,18 @@ function showUsersGroups () {
   # we have to make sure that the regular expression works)
 
   if [ $nullSession ]; then
-    objects=$(rpcclient -N $ipAddress -U '' -c "$command" | sed -e "s/$filter:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
+    objects=$(rpcclient -N $ipAddress -U '' -c "$RpcCommand" | sed -e "s/$filter:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
   else
-    objects=$(rpcclient $ipAddress -U "$username%$password" -c "$command" | sed -e "s/$filter:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
+    objects=$(rpcclient $ipAddress -U "$username%$password" -c "$RpcCommand" | sed -e "s/$filter:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#')
   fi
 
-  echo -e "${green}"
-  echo "$objectInTable"
-  displayTable "$objects" "$objectInTable" # Display information in a table
-  echo -e "${end}"
+  if [ "$3" == "check" ]; then
+    checkUserGroupExistence "$command" "$objects" "$filter" && return 0 || return 1
+  else
+    echo -e "${green}"
+    displayTable "$objects" "$objectInTable" # Display information in a table
+    echo -e "${end}"
+  fi
 }
 
 # Function to show the description of any user and group (this function is the same to "show users description" and "show groups description") - (code reuse)
@@ -212,62 +229,43 @@ function describeUsersAndGroups () {
 
 # Function to show the members of a group
 function showGroupMembers () {
-  group=$(echo "$availableGroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#' | grep -iE "^$selectedGroup$") # Obtaining real group name
+  group=$(echo "$objects" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#' | grep -iE "^$selectedObject$") # Obtaining real group name
 
-  echo -e "\n${yellow}[i]${end}${gray} Showing members of${end}${yellow} $group${end}${gray} group. Please wait ...${end}"
-
-  if [ $nullSession ]; then
-    groupRid=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
-
-    for rid in $(rpcclient -N $ipAddress -U '' -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
-      groupMembers+=$(rpcclient -N $ipAddress -U '' -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
-    done
-  else
-    groupRid=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
-
-    for rid in $(rpcclient $ipAddress -U "$username%$password" -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
-      groupMembers+=$(rpcclient $ipAddress -U "$username%$password" -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
-    done
-  fi
-
-  if [ "$groupMembers" ]; then # If there are members in the provided group
-    members=$(echo "$groupMembers" | tail -n +2) # Deleting the first \n
+  if [ "$group" ]; then
+    echo -e "\n${yellow}[i]${end}${gray} Showing members of${end}${yellow} $group${end}${gray} group. Please wait ...${end}"
   
-    echo -e "${green}"
-    displayTable "$members" "Miembros" # Displaying all members in a table
-    echo -e "${end}"
+    if [ $nullSession ]; then
+      groupRid=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
+  
+      for rid in $(rpcclient -N $ipAddress -U '' -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
+        groupMembers+=$(rpcclient -N $ipAddress -U '' -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
+      done
+    else
+      groupRid=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | grep -i "group:\[$group\].*" | sed "s/group:\[$group\] rid:\[//I" | tr -d ']') # All RID group members
+  
+      for rid in $(rpcclient $ipAddress -U "$username%$password" -c "querygroupmem $groupRid" | tr -d '\t' | grep -oP "rid:\[.*?]" | cut -f 2 -d "[" | tr -d "]"); do
+        groupMembers+=$(rpcclient $ipAddress -U "$username%$password" -c "queryuser $rid" | grep "User Name" | cut -f 2 -d ":" | tr '\t' '\n') # Getting the user names of RID members
+      done
+    fi
+  
+    if [ "$groupMembers" ]; then # If there are members in the provided group
+      members=$(echo "$groupMembers" | tail -n +2) # Deleting the first \n
+    
+      echo -e "${green}"
+      displayTable "$members" "Miembros" # Displaying all members in a table
+      echo -e "${end}"
+    else
+      echo -e "\n${red}[!]${end}${gray} There are NO members in the specified group${end}"
+    fi
+    unset groupMembers # Removal of the content of groupMembers to avoid repetition if the user provided the 'show group members' command again
   else
-    echo -e "\n${red}[i]${end}${gray} There is no member for the group${end}${yellow} $group${end}" # If there are NO members in the provided group
+    return 1
   fi
 }
 
-# Function to check the existence of a group
-function checkGroupExistence () {
-
-  selectedGroup=$(echo "$1" | cut -f 4- -d ' ') # Defining the group
-
-  if [ $nullSession ]; then
-    availableGroups=$(rpcclient -N $ipAddress -U '' -c "enumdomgroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#') # Obtaining all available groups
-  else
-    availableGroups=$(rpcclient $ipAddress -U "$username%$password" -c "enumdomgroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#') # Obtaining all available groups
-  fi
-
-  echo "$availableGroups" | sed -e "s/group:\[/#/g" -e "s/\] rid:.*/#/g"  | tr -d '#' | grep -iE "^$selectedGroup$" &>/dev/null # Checking if the provided group exists
-
-  if [ $? -eq 0 ]; then
-    return 0 # The provided group exist, return 0
-  fi
-  
-  return 1 # The provided group does NOT exist, return 1
-}
-
-# Function to show password policies
-function showPasswordPolicies () {
-  if [ $nullSession ]; then
-    rpcclient -N $ipAddress -U '' -c "getdompwinfo" # Showing password policies
-  else
-    rpcclient $ipAddress -U "$username%$password" -c "getdompwinf" # Showing password policies
-  fi
+# Functino to show the sid of a specific user
+function showUserSid () {
+  echo "Users Exist"
 }
 
 # Function to display a table with the contents of a variable
@@ -367,12 +365,22 @@ while true; do
     "whoami"| "w") whoAmI ;; # Print the current user
     "list prompts"|"l p") showAvailablePrompts ;;
     prompt*) changePrompt "$command" ;; # Change de prompt
-    "show users"|"s u") showUsersGroups "enumdomusers" "user" "Username" ;; # Showing existing users
-    "show groups"|"s g") showUsersGroups "enumdomgroups" "group" "Group" ;; # Showing existing groups 
+
+    # Showing existing users ($1 = command to execute in RPC; $2 = the filter that grep will use to get all users; 3 = text to represent the column of the object)
+    "show users"|"s u") showUsersGroups "enumdomusers" "user" "Username" ;;
+
+    # Showing existing groups ($1 = command to execute in RPC; $2 = the filter that grep will use to get all groups; $3 = text to represent the column of the object)
+    "show groups"|"s g") showUsersGroups "enumdomgroups" "group" "Group" ;;
+
     "show users description"|"s u d") showDescription "users" ;; # Show users description
     "show groups description"|"s g d") showDescription "groups" ;; # Show groups description
-    show\ group\ members\ *|s\ g\ m\ *) checkGroupExistence "$command" && showGroupMembers "$selectedGroup" || echo -e "\n${red}[!]${end}${gray} The specified group does not exist";; # Display the members of a group
-    "show password policies"|"s p p") showPasswordPolicies ;; # Show password policies
+
+    # Display the members of a group (showUsersGroups - $1 = command to execute in RPC; $2 = the filter that grep will use to get all gropus; $3 = entering the conditional that says that it is a single check)
+    show\ group\ members\ *|s\ g\ m\ *) showUsersGroups "enumdomgroups" "group" "check" && showGroupMembers "$selectedObject" || echo -e "\n${red}[!]${end}${gray} The specified group does not exist${end}" ;;
+
+    # Display the SID of the user provided (showUsersGroups - $1 = command to execute in RPC; $2 = the filter that grep will use to get all users; $3 = entering the conditional that says that it is a single check)
+    show\ user\ sid\ *|s\ u\ s\ *) showUsersGroups "enumdomusers" "user" "check" && showUserSid "$selectedObject" || echo -e "\n${red}[!]${end}${gray} The specified user does not exist${end}" ;;
+
     "");;
     *) echo -e "\n${red}[!]${end}${gray} Command NOT recognized${end}"; helpPanel;;
   esac

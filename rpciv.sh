@@ -95,8 +95,10 @@ function helpPanel () {
   echo -e "${gray}   show groups description, s g d\t➜    Show available description about groups"
   echo -e "${gray}   show group members GROUP, s g m\t➜    List the members of a specific group"
   echo -e "${gray}   show user sid USER, s u s\t\t➜    Show the SID of a specific user"
-  echo -e "${gray}   show group sid GROUP, s g s\t➜    Show the SID of a specific group"
-  echo -e "${gray}   show trusted domains, s t d\t➜    Show trusting relationships"
+
+  echo -e "\n${yellow}[i] ${end}${gray}Domain Commands:${end}\n"
+  echo -e "${gray}   show domain info, s d i\t\t➜    Show domain info (domain name and domain sid)"
+  echo -e "${gray}   show trusted domains, s t d\t\t➜    Show domain trust relationships"
 }
 
 # Who Am I
@@ -221,7 +223,7 @@ function describeUsersAndGroups () {
         fi
       fi
 
-      printf "\n${green}%-20s${end} ${gray}:${end} ${green}%s${end}\n" "$showObject" "$description" # Printing description
+      printf "\n${green}%-20s${end} ${gray}:%s${end}\n" "$showObject" "$description" # Printing description
       counter+=1
     fi
   done
@@ -265,7 +267,53 @@ function showGroupMembers () {
 
 # Functino to show the sid of a specific user
 function showUserSid () {
-  echo "Users Exist"
+  user=$(echo "$command" | cut -f 4- -d " ") # Getting the provided username
+
+  if [ $nullSession ]; then
+    sidResult=$(rpcclient -N $ipAddress -U '' -c "lookupnames $user") # Getting result from 'lookupnames $user'
+  else
+    sidResult=$(rpcclient $ipAddress -U "$username%$password" -c "lookupnames $user") # Getting result from 'lookupnames $user'
+  fi
+
+  if [[ $(echo "$sidResult" | grep "NT_STATUS_ACCESS_DENIED") ]]; then # We dont have permissions to display the SID
+    echo -e "\n${red}[!]${end}${gray} As ${end}${yellow}$userConnect${end}${gray} dont have permissions to perform this action${end}"
+    return
+  fi
+
+  sid=$(echo "$sidResult" | cut -f 2 -d " ") # Getting SID from the user provided
+  echo -e "\n${gray}SID: ${end}${yellow}$sid${end}"
+  return 0
+}
+
+# Function to show domain name and domain sid
+function showDomainInfo () {
+  if [ $nullSession ]; then
+    resultDomainInfo=$(rpcclient -N $ipAddress -U '' -c "lsaquery") # Getting result from 'lsaquery'
+  else
+    resultDomainInfo=$(rpcclient $ipAddress -U "$username%$password" -c "lsaquery") # Getting result from 'lsaquery'
+  fi
+
+  domainName=$(echo "$resultDomainInfo" | head -n 1 | sed "s/Domain Name: //g") # Obtaining the value of "Domain Name"
+  domainSid=$(echo "$resultDomainInfo" | tail -n 1 | sed "s/Domain Sid: //g") # Obtaining the value of "Domain Sid"
+
+  echo -e "\n${gray}Domain Name${end}:${yellow} $domainName${end}"
+  echo -e "${gray}Domain SID${end}:${yellow} $domainSid${end}"
+}
+
+# Function to show domain trust relationships
+function showTrustedDomains () {
+  if [ $nullSession ]; then
+    resultTrustedDomains=$(rpcclient -N $ipAddress -U '' -c "enumtrust") # Getting result from "enumtrust"
+  else
+    resultTrustedDomains=$(rpcclient $ipAddress -U "$username%$password" -c "enumtrust") # Getting resuslt from "enumtrust"
+  fi
+
+  if [ "$resultTrustedDomains" ]; then
+    trustedDomains=$(echo "$resultTrustedDomains" | grep "Domain Name:" | sed "s/Domain Name: //g")
+    displayTable "$resultTrustedDomains" "Trusted Domains"
+  else
+    echo -e "\n${red}[!]${end}${gray} There is NO trust relationships in the domain${end}"
+  fi
 }
 
 # Function to display a table with the contents of a variable
@@ -278,7 +326,7 @@ function displayTable() {
   # Convert the variable into an array, splitting by newlines
   read -d '' -ra items <<< "$variable"
 
-  # Calculate the maximum width of the content column (including the header "Username")
+  # Calculate the maximum width of the content column
   local max_length=8 # Minimum width to fit "Username"
   for item in "${items[@]}"; do
     if (( ${#item} > max_length )); then
@@ -356,7 +404,7 @@ checkConnection || exit 1 # Check the RPC connection
 prompt="[$userConnect] >" # Default prompt - [USERNAME] > 
 
 while true; do
-  echo -ne "\n${blue}$prompt ${end}${white}" && read command # Command input
+  echo -ne "\n${blue}$prompt ${end}${white}${gray}" && read command  # Command input
 
   case "$command" in
     "help"|"H"|"h") helpPanel ;; # Command Help Panel
@@ -381,7 +429,9 @@ while true; do
     # Display the SID of the user provided (showUsersGroups - $1 = command to execute in RPC; $2 = the filter that grep will use to get all users; $3 = entering the conditional that says that it is a single check)
     show\ user\ sid\ *|s\ u\ s\ *) showUsersGroups "enumdomusers" "user" "check" && showUserSid "$selectedObject" || echo -e "\n${red}[!]${end}${gray} The specified user does not exist${end}" ;;
 
-    "");;
-    *) echo -e "\n${red}[!]${end}${gray} Command NOT recognized${end}"; helpPanel;;
+    "show domain info"|"s d i") showDomainInfo ;; # Show domain info
+    "show trusted domains"|"s t d") showTrustedDomains || echo -e "\n${red}[!]${end}${gray}${end}" ;; # Show domain trust relationships
+    "") ;;
+    *) echo -e "\n${red}[!]${end}${gray} Command NOT recognized. Run \"help\" or \"h\" to display the Help Panel${end}";; # The command does not exist
   esac
 done
